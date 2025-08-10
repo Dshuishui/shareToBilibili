@@ -1,47 +1,60 @@
-<!DOCTYPE html>
+<!-- backend/static/index.html -->
+<!doctype html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8" />
-<title>Bili One-Click - Stage2</title>
-<link rel="stylesheet" href="/static/styles.css">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Bili One-Click — Stage3</title>
+  <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-<div class="container">
-<h1>一键投稿 Demo (Stage2)</h1>
+  <div class="container">
+    <h1>一键投稿 Demo（Stage3）</h1>
 
-<!-- 上传表单 -->
-<form id="upload-form">
-    <label>视频文件<br>
-        <input type="file" name="file" accept="video/*" required>
-    </label><br>
-    <label>标题<br>
-        <input type="text" name="title" required>
-    </label><br>
-    <label>简介<br>
-        <textarea name="description"></textarea>
-    </label><br>
-    <label>标签（逗号分隔）<br>
-        <input type="text" name="tags">
-    </label><br>
-    <label>分区（可选）<br>
-        <input type="text" name="partition">
-    </label><br>
-    <button type="submit">上传并保存</button>
-</form>
+    <section>
+      <h2>1. 上传视频并填写信息</h2>
+      <form id="upload-form">
+        <label>视频文件（小文件测试）<br/>
+          <input type="file" name="file" accept="video/*" required />
+        </label>
+        <label>标题<br/>
+          <input type="text" name="title" required />
+        </label>
+        <label>简介<br/>
+          <textarea name="description"></textarea>
+        </label>
+        <label>标签（逗号分隔）<br/>
+          <input type="text" name="tags" />
+        </label>
+        <label>分区（数字，示例 122）<br/>
+          <input type="text" name="partition" />
+        </label>
+        <div>
+          <button type="submit">上传并保存（本地）</button>
+        </div>
+      </form>
+    </section>
 
-<hr>
+    <hr/>
 
-<!-- Cookie 输入 -->
-<h2>设置 B 站 Cookie</h2>
-<input type="text" id="cookie-input" placeholder="SESSDATA=xxx; bili_jct=xxx;">
-<button id="save-cookie-btn">保存 Cookie</button>
+    <section>
+      <h2>2. 设置 B 站 Cookie</h2>
+      <p>在浏览器登陆 B 站 后，从开发者工具中复制 cookie 字符串（示例：<code>SESSDATA=xxx; bili_jct=yyy; buvid3=zzz</code>）</p>
+      <input type="text" id="cookie-input" placeholder="SESSDATA=...; bili_jct=...; buvid3=..." style="width:100%"/>
+      <button id="save-cookie-btn">保存 Cookie</button>
+    </section>
 
-<hr>
+    <hr/>
 
-<!-- 上传结果 -->
-<div id="result"></div>
+    <section>
+      <h2>3. 确认并一键投稿</h2>
+      <div id="uploaded-info">尚未上传视频</div>
+      <button id="publish-btn" disabled>一键投稿（发布到 B 站）</button>
+      <div id="publish-status"></div>
+    </section>
 
-</div>
-<script src="/static/app.js"></script>
+  </div>
+
+  <script src="/static/app.js"></script>
 </body>
 </html>

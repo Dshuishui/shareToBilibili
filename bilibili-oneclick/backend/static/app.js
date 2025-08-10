@@ -1,62 +1,79 @@
 // backend/static/app.js
 document.addEventListener('DOMContentLoaded', function () {
     const form = document.getElementById('upload-form');
-    const progressDiv = document.getElementById('progress');
-    const resultDiv = document.getElementById('result');
+    const cookieInput = document.getElementById('cookie-input');
+    const saveCookieBtn = document.getElementById('save-cookie-btn');
+    const uploadedInfoDiv = document.getElementById('uploaded-info');
+    const publishBtn = document.getElementById('publish-btn');
+    const publishStatusDiv = document.getElementById('publish-status');
   
-    form.addEventListener('submit', function (e) {
+    let lastTaskId = null;
+  
+    form.addEventListener('submit', async function (e) {
       e.preventDefault();
-      resultDiv.textContent = '';
-      progressDiv.textContent = '进度：0%';
+      publishStatusDiv.textContent = '';
+      const fd = new FormData(form);
   
-      const formData = new FormData(form);
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/upload');
-  
-      xhr.upload.addEventListener('progress', function (evt) {
-        if (evt.lengthComputable) {
-          const percentComplete = Math.round((evt.loaded / evt.total) * 100);
-          progressDiv.textContent = '进度：' + percentComplete + '%';
-        }
-      });
-  
-      xhr.onload = function () {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          const resp = JSON.parse(xhr.responseText);
-          resultDiv.innerHTML = `<div class="ok">上传成功 · task_id: <b>${resp.task_id}</b></div>`;
+      try {
+        const resp = await fetch('/upload', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (data.success) {
+          lastTaskId = data.task_id;
+          uploadedInfoDiv.innerHTML = `<pre>${JSON.stringify(data.metadata, null, 2)}</pre>`;
+          publishBtn.disabled = false;
+          publishStatusDiv.innerHTML = `<div style="color:green">上传并保存成功 · task_id: ${data.task_id}</div>`;
         } else {
-          resultDiv.innerHTML = `<div class="err">上传失败：${xhr.responseText}</div>`;
+          uploadedInfoDiv.textContent = '上传失败';
         }
-      };
+      } catch (err) {
+        console.error(err);
+        uploadedInfoDiv.textContent = '上传时发生异常，请查看控制台';
+      }
+    });
   
-      xhr.onerror = function () {
-        resultDiv.innerHTML = `<div class="err">上传时发生网络错误</div>`;
-      };
+    saveCookieBtn.addEventListener('click', async function () {
+      const cookie = cookieInput.value.trim();
+      if (!cookie) {
+        alert('请先粘贴 cookie 字符串');
+        return;
+      }
+      const fd = new FormData();
+      fd.append('cookie', cookie);
+      try {
+        const resp = await fetch('/save_cookie', { method: 'POST', body: fd });
+        const data = await resp.json();
+        alert(data.message || JSON.stringify(data));
+      } catch (err) {
+        console.error(err);
+        alert('保存 cookie 发生错误');
+      }
+    });
   
-      xhr.send(formData);
+    publishBtn.addEventListener('click', async function () {
+      publishStatusDiv.textContent = '';
+      if (!lastTaskId) {
+        alert('请先上传视频并确认信息');
+        return;
+      }
+      publishBtn.disabled = true;
+      publishStatusDiv.innerHTML = '开始投稿，请耐心等待（上传过程可能较慢）...';
+  
+      try {
+        const resp = await fetch(`/publish/${lastTaskId}`, { method: 'POST' });
+        if (!resp.ok) {
+          const err = await resp.json();
+          publishStatusDiv.innerHTML = `<div style="color:red">投稿失败：${err.detail || JSON.stringify(err)}</div>`;
+          publishBtn.disabled = false;
+          return;
+        }
+        const data = await resp.json();
+        publishStatusDiv.innerHTML = `<div style="color:green">投稿接口返回：<pre>${JSON.stringify(data, null, 2)}</pre></div>`;
+      } catch (err) {
+        console.error(err);
+        publishStatusDiv.innerHTML = `<div style="color:red">投稿过程中出现异常（查看控制台）</div>`;
+      } finally {
+        publishBtn.disabled = false;
+      }
     });
   });
-  document.getElementById('upload-form').addEventListener('submit', async function(e) {
-    e.preventDefault();
-    let formData = new FormData(this);
-
-    let res = await fetch('/upload', { method: 'POST', body: formData });
-    let data = await res.json();
-
-    if (data.success) {
-        document.getElementById('result').innerHTML = `
-            <h3>上传成功，请确认信息：</h3>
-            <pre>${JSON.stringify(data.metadata, null, 2)}</pre>
-        `;
-    }
-});
-
-document.getElementById('save-cookie-btn').addEventListener('click', async function() {
-    let cookie = document.getElementById('cookie-input').value;
-    let formData = new FormData();
-    formData.append('cookie', cookie);
-
-    let res = await fetch('/save_cookie', { method: 'POST', body: formData });
-    let data = await res.json();
-    alert(data.message);
-});
+  
