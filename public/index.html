@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>B站一键投稿工具</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #00a1d6;
+            text-align: center;
+        }
+
+        .step {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+
+        .step h3 {
+            margin-top: 0;
+            color: #333;
+        }
+
+        input,
+        textarea,
+        select {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+
+        button {
+            background-color: #00a1d6;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        button:hover {
+            background-color: #0084b4;
+        }
+
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            display: none;
+        }
+
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🎬 B站一键投稿工具</h1>
+
+        <!-- 步骤1: B站登录 -->
+        <div class="step">
+            <h3>📋 步骤1: B站账号登录</h3>
+            <p>点击下方按钮，将打开B站登录页面，请完成登录后关闭窗口</p>
+            <button onclick="loginBilibili()">🔑 登录B站账号</button>
+            <div id="loginStatus" class="status"></div>
+        </div>
+
+        <!-- 步骤2: 视频文件上传 -->
+        <div class="step">
+            <h3>📁 步骤2: 选择视频文件</h3>
+            <input type="file" id="videoFile" accept="video/*" onchange="handleFileSelect()">
+            <div id="fileStatus" class="status"></div>
+        </div>
+
+        <!-- 步骤3: 视频信息填写 -->
+        <div class="step">
+            <h3>✏️ 步骤3: 填写视频信息</h3>
+
+            <label for="videoTitle">视频标题：</label>
+            <input type="text" id="videoTitle" placeholder="请输入视频标题（必填）" maxlength="80">
+
+            <label for="videoDesc">视频简介：</label>
+            <textarea id="videoDesc" rows="4" placeholder="请输入视频简介..." maxlength="2000"></textarea>
+
+            <label for="videoTags">视频标签：</label>
+            <input type="text" id="videoTags" placeholder="请输入标签，用英文逗号分隔，如：游戏,娱乐,搞笑">
+
+            <label for="videoCategory">视频分区：</label>
+            <select id="videoCategory">
+                <option value="">请选择分区</option>
+                <option value="douga">动画</option>
+                <option value="game">游戏</option>
+                <option value="kichiku">鬼畜</option>
+                <option value="music">音乐</option>
+                <option value="dance">舞蹈</option>
+                <option value="cinephile">影视</option>
+                <option value="ent">娱乐</option>
+                <option value="knowledge">知识</option>
+                <option value="tech">科技</option>
+                <option value="information">资讯</option>
+                <option value="food">美食</option>
+                <option value="life">生活</option>
+                <option value="car">汽车</option>
+                <option value="fashion">时尚</option>
+                <option value="sports">运动</option>
+                <option value="animal">动物圈</option>
+            </select>
+        </div>
+
+        <!-- 步骤4: 一键投稿 -->
+        <div class="step">
+            <h3>🚀 步骤4: 一键投稿</h3>
+            <p>确认信息无误后，点击下方按钮将直接上传视频到B站</p>
+            <button onclick="startUpload()" id="uploadBtn">🎯 开始投稿</button>
+            <div id="uploadStatus" class="status"></div>
+        </div>
+    </div>
+
+    <script>
+        // 登录B站
+        async function loginBilibili() {
+            const status = document.getElementById('loginStatus');
+            const button = event.target;
+
+            status.style.display = 'block';
+            status.className = 'status success';
+            status.textContent = '正在启动浏览器，请在弹出的窗口中完成登录...';
+            button.disabled = true;
+            button.textContent = '登录中...';
+
+            try {
+                const response = await fetch('/login');
+                const result = await response.json();
+
+                if (result.success) {
+                    status.className = 'status success';
+                    status.textContent = `✅ ${result.message}`;
+                    button.textContent = '✅ 已登录';
+                } else {
+                    status.className = 'status error';
+                    status.textContent = `❌ ${result.message}`;
+                    button.disabled = false;
+                    button.textContent = '🔑 重新登录';
+                }
+            } catch (error) {
+                status.className = 'status error';
+                status.textContent = '❌ 网络错误，请检查服务器是否正常运行';
+                button.disabled = false;
+                button.textContent = '🔑 重新登录';
+            }
+        }
+
+        // 处理文件选择
+        function handleFileSelect() {
+            const fileInput = document.getElementById('videoFile');
+            const status = document.getElementById('fileStatus');
+
+            if (fileInput.files.length > 0) {
+                const file = fileInput.files[0];
+                status.style.display = 'block';
+                status.className = 'status success';
+                status.textContent = `已选择文件: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+            }
+        }
+
+        // 开始上传
+        async function startUpload() {
+            const title = document.getElementById('videoTitle').value;
+            const desc = document.getElementById('videoDesc').value;
+            const tags = document.getElementById('videoTags').value;
+            const category = document.getElementById('videoCategory').value;
+            const file = document.getElementById('videoFile').files[0];
+            const status = document.getElementById('uploadStatus');
+
+            // 简单验证
+            if (!file) {
+                status.style.display = 'block';
+                status.className = 'status error';
+                status.textContent = '请先选择视频文件！';
+                return;
+            }
+
+            if (!title.trim()) {
+                status.style.display = 'block';
+                status.className = 'status error';
+                status.textContent = '请填写视频标题！';
+                return;
+            }
+
+            if (!category) {
+                status.style.display = 'block';
+                status.className = 'status error';
+                status.textContent = '请选择视频分区！';
+                return;
+            }
+
+            // 显示上传中状态
+            status.style.display = 'block';
+            status.className = 'status success';
+            status.textContent = '正在上传视频到B站，请耐心等待...';
+
+            const uploadBtn = document.getElementById('uploadBtn');
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = '上传中...';
+
+            try {
+                const formData = new FormData();
+                formData.append('video', file);
+                formData.append('title', title);
+                formData.append('description', desc);
+                formData.append('tags', tags);
+                formData.append('category', category);
+
+                const response = await fetch('/upload-video', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    status.className = 'status success';
+                    status.textContent = `✅ ${result.message}`;
+                } else {
+                    status.className = 'status error';
+                    status.textContent = `❌ ${result.message}`;
+                }
+            } catch (error) {
+                status.className = 'status error';
+                status.textContent = '❌ 网络错误，请检查服务器是否正常运行';
+            } finally {
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = '🎯 开始投稿';
+            }
+        }
+    </script>
+</body>
+
+</html>

@@ -12,7 +12,7 @@
 ## 📁 项目结构
 
 ```
-bilibili-auto-upload/
+shareToBilibili/
 ├── public/
 │   └── index.html          # 前端界面
 ├── python-backend/
