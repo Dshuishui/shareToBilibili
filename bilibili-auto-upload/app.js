@@ -10,9 +10,9 @@ const port = 3000;
 // Python后端地址
 const PYTHON_BACKEND = 'http://localhost:5001';
 
-// 分区ID映射
+// 分区ID映射 - 确保和测试代码一致
 const CATEGORY_MAP = {
-    'douga': 1,      // 动画
+    'douga': 1,      // 动画 - 和test_upload.py一致
     'game': 4,       // 游戏  
     'kichiku': 119,  // 鬼畜
     'music': 3,      // 音乐
@@ -67,7 +67,10 @@ app.get('/login', async (req, res) => {
             headless: false,
             defaultViewport: null,
             args: ['--start-maximized'],
-            executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+            // 根据系统调整Chrome路径
+            executablePath: process.platform === 'darwin' 
+                ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+                : undefined // Windows和Linux使用默认路径
         });
 
         const page = await browser.newPage();
@@ -147,11 +150,19 @@ app.get('/check-login', async (req, res) => {
     }
 });
 
-// 视频上传接口
+// 视频上传接口 - 增强错误处理
 app.post('/upload-video', upload.single('video'), async (req, res) => {
     try {
         const { title, description, tags, category } = req.body;
         const videoFile = req.file;
+        
+        console.log('收到上传请求:', {
+            title,
+            description,
+            tags,
+            category,
+            hasFile: !!videoFile
+        });
         
         if (!videoFile) {
             return res.json({
@@ -161,14 +172,15 @@ app.post('/upload-video', upload.single('video'), async (req, res) => {
         }
         
         // 转换分区ID
-        const categoryId = CATEGORY_MAP[category] || 160; // 默认生活分区
+        const categoryId = CATEGORY_MAP[category] || 1; // 默认动画分区，和test_upload.py一致
         
-        console.log('收到视频上传请求:', {
+        console.log('处理视频上传:', {
             title,
             description,
             tags,
             category: `${category} (${categoryId})`,
-            filename: videoFile.filename
+            filename: videoFile.filename,
+            size: `${(videoFile.size / 1024 / 1024).toFixed(2)} MB`
         });
         
         // 创建FormData转发给Python后端
@@ -180,25 +192,45 @@ app.post('/upload-video', upload.single('video'), async (req, res) => {
         formData.append('title', title);
         formData.append('description', description || '');
         formData.append('tags', tags || '');
-        formData.append('category', categoryId.toString()); // 发送数字ID
+        formData.append('category', categoryId.toString()); // 确保发送数字ID
+        
+        console.log('正在转发给Python后端...');
         
         const response = await axios.post(`${PYTHON_BACKEND}/upload-video`, formData, {
             headers: {
                 ...formData.getHeaders(),
             },
-            timeout: 300000 // 5分钟超时
+            timeout: 600000 // 10分钟超时，给大文件上传足够时间
         });
         
+        console.log('Python后端响应:', response.data);
+        
         // 删除临时文件
-        fs.unlinkSync(videoFile.path);
+        try {
+            fs.unlinkSync(videoFile.path);
+            console.log('临时文件已删除:', videoFile.path);
+        } catch (e) {
+            console.warn('删除临时文件失败:', e.message);
+        }
         
         res.json(response.data);
         
     } catch (error) {
         console.error('上传视频失败:', error.message);
+        
+        // 详细错误信息
+        let errorMessage = '上传失败: ';
+        if (error.response && error.response.data) {
+            errorMessage += error.response.data.message || error.message;
+        } else if (error.code === 'ECONNREFUSED') {
+            errorMessage += 'Python后端连接失败，请确保后端服务正在运行';
+        } else {
+            errorMessage += error.message;
+        }
+        
         res.json({
             success: false,
-            message: '上传失败: ' + error.message
+            message: errorMessage
         });
     }
 });
@@ -216,6 +248,13 @@ app.listen(port, () => {
     console.log(`Node.js前端服务运行在 http://localhost:${port}`);
     console.log(`Python后端地址: ${PYTHON_BACKEND}`);
     console.log('请确保Python后端服务也在运行！');
+    console.log('=' * 50);
+    console.log('🔧 启动步骤:');
+    console.log('1. 启动Python后端: cd python-backend && python3 app.py');
+    console.log('2. 访问前端页面: http://localhost:3000');
+    console.log('3. 点击"登录B站账号"获取Cookie');
+    console.log('4. 选择视频文件并填写信息');
+    console.log('5. 点击"开始投稿"完成上传');
 });
 
 // 优雅关闭

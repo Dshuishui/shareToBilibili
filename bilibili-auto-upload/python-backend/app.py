@@ -3,11 +3,14 @@ import json
 import os
 import tempfile
 import shutil
+import base64
+import time
 from pathlib import Path
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from bilibili_api import Credential
 from bilibili_api.video_uploader import VideoUploader, VideoUploaderPage, VideoMeta
+from bilibili_api.utils.picture import Picture
 
 app = Flask(__name__)
 CORS(app)
@@ -19,6 +22,17 @@ user_credential = None
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+def create_default_cover():
+    """创建默认封面图片 - 参考test_upload.py"""
+    # 1x1像素的PNG图片 base64 数据
+    minimal_png_data = base64.b64decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChAGA4o7+3AAAAABJRU5ErkJggg=='
+    )
+    
+    picture = Picture()
+    picture.content = minimal_png_data
+    return picture
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """健康检查接口"""
@@ -26,7 +40,8 @@ def health_check():
         "status": "ok",
         "message": "Python后端服务运行正常",
         "service": "bilibili-api-backend",
-        "upload_dir": str(UPLOAD_DIR)
+        "upload_dir": str(UPLOAD_DIR),
+        "logged_in": user_credential is not None
     })
 
 @app.route('/login', methods=['POST'])
@@ -43,42 +58,35 @@ def login():
             })
         
         # 从Cookie数组中提取需要的值
-        sessdata = None
-        bili_jct = None
-        buvid3 = None
-        dedeuserid = None
-        
+        cookie_dict = {}
         for cookie in cookies:
-            if cookie['name'] == 'SESSDATA':
-                sessdata = cookie['value']
-            elif cookie['name'] == 'bili_jct':
-                bili_jct = cookie['value']
-            elif cookie['name'] == 'buvid3':
-                buvid3 = cookie['value']
-            elif cookie['name'] == 'DedeUserID':
-                dedeuserid = cookie['value']
+            cookie_dict[cookie['name']] = cookie['value']
         
-        if not all([sessdata, bili_jct, buvid3]):
+        # 检查必要的Cookie
+        required_cookies = ['SESSDATA', 'bili_jct', 'buvid3']
+        missing_cookies = [name for name in required_cookies if name not in cookie_dict]
+        
+        if missing_cookies:
             return jsonify({
                 "success": False,
-                "message": f"缺少必要的Cookie信息。需要：SESSDATA, bili_jct, buvid3"
+                "message": f"缺少必要的Cookie: {', '.join(missing_cookies)}"
             })
         
-        # 创建凭证对象
+        # 创建凭证对象 - 完全按照test_upload.py的方式
         global user_credential
         user_credential = Credential(
-            sessdata=sessdata,
-            bili_jct=bili_jct,
-            buvid3=buvid3,
-            dedeuserid=dedeuserid  # 可选，但推荐
+            sessdata=cookie_dict['SESSDATA'],
+            bili_jct=cookie_dict['bili_jct'],
+            buvid3=cookie_dict['buvid3'],
+            dedeuserid=cookie_dict.get('DedeUserID')  # 可选，但推荐
         )
         
         print(f"✅ 用户凭证创建成功")
-        print(f"   SESSDATA: {sessdata[:20]}...")
-        print(f"   bili_jct: {bili_jct[:10]}...")
-        print(f"   buvid3: {buvid3[:20]}...")
-        if dedeuserid:
-            print(f"   DedeUserID: {dedeuserid}")
+        print(f"   SESSDATA: {cookie_dict['SESSDATA'][:20]}...")
+        print(f"   bili_jct: {cookie_dict['bili_jct'][:10]}...")
+        print(f"   buvid3: {cookie_dict['buvid3'][:20]}...")
+        if 'DedeUserID' in cookie_dict:
+            print(f"   DedeUserID: {cookie_dict['DedeUserID']}")
         
         return jsonify({
             "success": True,
@@ -104,7 +112,7 @@ def check_login():
 
 @app.route('/upload-video', methods=['POST'])
 def upload_video():
-    """上传视频接口"""
+    """上传视频接口 - 修正版本"""
     try:
         global user_credential
         
@@ -140,16 +148,23 @@ def upload_video():
                 "message": "请选择视频分区"
             })
         
+        try:
+            category_id = int(category_id)
+        except ValueError:
+            return jsonify({
+                "success": False,
+                "message": "无效的分区ID"
+            })
+        
         # 保存视频文件到本地
         try:
-            # 创建安全的文件名
-            safe_filename = f"{int(asyncio.get_event_loop().time())}_{video_file.filename}"
+            timestamp = int(time.time())
+            safe_filename = f"{timestamp}_{video_file.filename}"
             local_video_path = UPLOAD_DIR / safe_filename
             
             print(f"📁 保存视频文件到: {local_video_path}")
             video_file.save(str(local_video_path))
             
-            # 验证文件是否成功保存
             if not local_video_path.exists():
                 raise FileNotFoundError(f"文件保存失败: {local_video_path}")
             
@@ -166,23 +181,34 @@ def upload_video():
         # 准备标签列表
         tag_list = [tag.strip() for tag in tags.split(',') if tag.strip()] if tags else []
         
-        # 异步上传视频
-        def run_upload():
-            return asyncio.run(async_upload_video(
+        # 使用新的事件循环运行异步上传
+        try:
+            # 创建新的事件循环
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            result = loop.run_until_complete(async_upload_video(
                 str(local_video_path), 
                 title, 
                 description, 
                 tag_list, 
-                int(category_id), 
+                category_id, 
                 user_credential
             ))
-        
-        result = run_upload()
+            
+            loop.close()
+        except Exception as e:
+            print(f"❌ 事件循环错误: {e}")
+            return jsonify({
+                "success": False,
+                "message": f"上传过程中出现错误: {str(e)}"
+            })
         
         # 清理本地文件
         try:
-            local_video_path.unlink()
-            print(f"🗑️ 临时文件已删除: {local_video_path}")
+            if local_video_path.exists():
+                local_video_path.unlink()
+                print(f"🗑️ 临时文件已删除: {local_video_path}")
         except Exception as e:
             print(f"⚠️ 临时文件删除失败: {e}")
         
@@ -190,17 +216,20 @@ def upload_video():
         
     except Exception as e:
         print(f"❌ 上传接口错误: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             "success": False,
             "message": f"上传失败: {str(e)}"
         })
 
 async def async_upload_video(video_path, title, description, tags, category_id, credential):
-    """异步上传视频的具体实现"""
+    """异步上传视频 - 完全参考test_upload.py的实现"""
     try:
         print(f"🎬 开始上传视频")
         print(f"   文件路径: {video_path}")
         print(f"   标题: {title}")
+        print(f"   描述: {description[:50]}..." if description and len(description) > 50 else description or "无描述")
         print(f"   分区ID: {category_id}")
         print(f"   标签: {tags}")
         
@@ -209,29 +238,35 @@ async def async_upload_video(video_path, title, description, tags, category_id, 
         if not video_file_path.exists():
             raise FileNotFoundError(f"视频文件不存在: {video_path}")
         
-        # 创建视频元数据
+        # 创建默认封面 - 关键修复
+        # cover = create_default_cover()
+        cover = "./1.jpg"  # 使用本地图片路径代替
+        print("✅ 封面图片创建成功")
+        
+        # 创建视频元数据 - 完全按照test_upload.py的参数
         meta = VideoMeta(
             tid=category_id,          # 分区ID
             title=title,              # 视频标题
-            desc=description,         # 视频描述
+            desc=description or "这是一个测试视频",  # 视频描述
+            cover=cover,              # 封面图片 - 必须提供
             tags=tags,                # 标签列表
-            copyright=1,              # 1为原创，2为转载
-            no_reprint=1,            # 1为禁止转载
-            open_elec=1              # 1为开启充电
+            original=True,            # True=原创 (对应test_upload.py的original=True)
+            no_reprint=True,         # True=禁止转载 (对应test_upload.py的no_reprint=True)
+            open_elec=True           # True=开启充电 (对应test_upload.py的open_elec=True)
         )
         
         print("✅ VideoMeta创建成功")
         
-        # 创建视频页面对象
+        # 创建视频页面对象 - 完全按照test_upload.py
         page = VideoUploaderPage(
             path=video_path,         # 视频文件路径
             title=title,             # 分P标题
-            description=description   # 分P描述
+            description=description or "测试描述"  # 分P描述
         )
         
         print("✅ VideoUploaderPage创建成功")
         
-        # 创建上传器
+        # 创建上传器 - 完全按照test_upload.py
         uploader = VideoUploader(
             pages=[page],
             meta=meta,
@@ -240,22 +275,48 @@ async def async_upload_video(video_path, title, description, tags, category_id, 
         
         print("✅ VideoUploader创建成功，开始上传...")
         
-        # 添加上传事件监听
+        # 添加上传进度监听 - 参考test_upload.py
         @uploader.on("__ALL__")
         async def upload_event_handler(data):
-            print(f"📡 上传事件: {data}")
+            event_name = data.get('name', 'UNKNOWN')
+            print(f"📡 上传事件: {event_name}")
+            
+            # 特殊处理一些关键事件
+            if event_name == 'COMPLETE':
+                event_data = data.get('data', [{}])
+                if event_data and len(event_data) > 0:
+                    result_data = event_data[0]
+                    if 'bvid' in result_data:
+                        print(f"🎉 投稿成功！BV号: {result_data['bvid']}")
         
-        # 开始上传
+        # 开始上传 - 关键步骤
         result = await uploader.start()
         
-        print(f"🎉 上传成功！")
-        if isinstance(result, dict) and 'bvid' in result:
-            print(f"   BV号: {result['bvid']}")
+        print(f"🎉 上传完成！")
+        print(f"结果: {result}")
+        
+        # 构造返回结果
+        success_message = f"视频上传成功！标题：{title}"
+        bvid = None
+        aid = None
+        video_url = None
+        
+        if isinstance(result, dict):
+            if 'bvid' in result:
+                bvid = result['bvid']
+                success_message += f"\nBV号：{bvid}"
+                video_url = f"https://www.bilibili.com/video/{bvid}"
+            if 'aid' in result:
+                aid = result['aid']
+                success_message += f"\nAV号：av{aid}"
         
         return {
             "success": True,
-            "message": f"视频上传成功！标题：{title}",
-            "result": result
+            "message": success_message,
+            "result": result,
+            "bvid": bvid,
+            "aid": aid,
+            "video_url": video_url
         }
         
     except Exception as e:
@@ -266,7 +327,8 @@ async def async_upload_video(video_path, title, description, tags, category_id, 
         
         return {
             "success": False,
-            "message": f"上传过程出错: {str(e)}"
+            "message": f"上传过程出错: {str(e)}",
+            "error_detail": str(e)
         }
 
 if __name__ == '__main__':
@@ -274,4 +336,10 @@ if __name__ == '__main__':
     print(f"📁 上传目录: {UPLOAD_DIR}")
     print("📡 服务地址: http://localhost:5001")
     print("🔗 健康检查: http://localhost:5001/health")
+    print("=" * 50)
+    print("📋 测试建议:")
+    print("1. 先访问健康检查确认服务启动")
+    print("2. 使用前端进行B站登录获取Cookie")
+    print("3. 上传测试视频进行验证")
+    print("=" * 50)
     app.run(debug=True, port=5001, host='0.0.0.0')
