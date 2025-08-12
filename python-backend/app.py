@@ -13,7 +13,11 @@ from bilibili_api.video_uploader import VideoUploader, VideoUploaderPage, VideoM
 from bilibili_api.utils.picture import Picture
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=[
+    "http://localhost:5173",  # XBuilder开发服务器
+    "http://localhost:3000",  # Node.js服务
+    "http://127.0.0.1:5173",  # 备用地址
+], supports_credentials=True)
 
 # 全局变量存储用户凭证
 user_credential = None

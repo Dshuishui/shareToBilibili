@@ -1,4 +1,5 @@
 const express = require('express');
+const cors = require('cors'); // 添加这行
 const multer = require('multer');
 const path = require('path');
 const axios = require('axios');
@@ -10,6 +11,18 @@ const port = 3000;
 
 // Python后端地址
 const PYTHON_BACKEND = 'http://localhost:5001';
+
+// 添加CORS配置 - 在其他中间件之前
+app.use(cors({
+    origin: [
+      'http://localhost:5173', // XBuilder开发服务器
+      'http://localhost:3000', // 允许同源请求
+      // 如果有其他需要的域名可以继续添加
+    ],
+    credentials: true, // 允许携带cookies
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+  }));
 
 // 分区ID映射 - B站真实分区ID
 const CATEGORY_MAP = {
@@ -138,10 +151,15 @@ app.get('/login', async (req, res) => {
 });
 
 // 🚀 新增：自动化投稿接口
-app.post('/auto-upload', upload.single('video'), async (req, res) => {
+// 修改路由定义，支持video和cover两个字段
+app.post('/auto-upload', upload.fields([
+    { name: 'video', maxCount: 1 },
+    { name: 'cover', maxCount: 1 }  // 添加封面字段支持
+]), async (req, res) => {
     try {
         const { title, description, tags, category } = req.body;
-        const videoFile = req.file;
+        const videoFile = req.files['video'] ? req.files['video'][0] : null;
+        const coverFile = req.files['cover'] ? req.files['cover'][0] : null;
 
         console.log('🎬 收到自动化投稿请求:', {
             title,
@@ -149,7 +167,9 @@ app.post('/auto-upload', upload.single('video'), async (req, res) => {
             tags,
             category,
             hasFile: !!videoFile,
-            fileSize: videoFile ? `${(videoFile.size / 1024 / 1024).toFixed(2)} MB` : 'N/A'
+            fileSize: videoFile ? `${(videoFile.size / 1024 / 1024).toFixed(2)} MB` : 'N/A',
+            hasCover: !!coverFile, // 添加封面信息
+            coverSize: coverFile ? `${(coverFile.size / 1024).toFixed(2)} KB` : 'N/A'
         });
 
         // 验证必要参数
@@ -174,12 +194,13 @@ app.post('/auto-upload', upload.single('video'), async (req, res) => {
             });
         }
 
-        // 执行自动化投稿流程
+        // 执行自动化投稿流程，传递封面文件
         const result = await performAutomatedUpload(videoFile, {
             title: title.trim(),
             description: description?.trim() || '',
             tags: tags?.trim() || '',
-            category
+            category,
+            coverFile: coverFile // 传递封面文件对象
         });
 
         res.json(result);
@@ -196,6 +217,119 @@ app.post('/auto-upload', upload.single('video'), async (req, res) => {
 // 在文件顶部添加辅助函数
 const { setTimeout } = require('timers/promises');
 
+
+// 上传封面文件 - 新增函数
+async function uploadCoverFile(coverFile) {
+    try {
+        console.log('🔍 查找封面上传元素...');
+
+        // B站投稿页面的封面上传选择器（需要根据实际页面调整）
+        const coverUploadSelectors = [
+            'input[accept*="image"]',              // 通用图片上传
+            '.cover-upload input[type="file"]',    // 封面上传区域
+            '.upload-cover input[type="file"]',    // 封面上传
+            '[class*="cover"] input[type="file"]', // 包含cover的类名
+            '.bcc-upload-cover input[type="file"]', // B站封面上传组件
+        ];
+
+        let coverInput = null;
+        
+        // 首先尝试直接查找封面上传input
+        for (const selector of coverUploadSelectors) {
+            try {
+                await currentPage.waitForSelector(selector, { timeout: 3000 });
+                coverInput = await currentPage.$(selector);
+                if (coverInput) {
+                    console.log(`✅ 找到封面上传元素: ${selector}`);
+                    break;
+                }
+            } catch (e) {
+                console.log(`⚠️ 封面上传选择器 ${selector} 未找到`);
+                continue;
+            }
+        }
+
+        // 如果找不到直接的input，尝试点击封面上传按钮来激活
+        if (!coverInput) {
+            console.log('🖱️ 尝试点击封面上传按钮...');
+            const coverButtonSelectors = [
+                'button:contains("上传封面")',
+                '.cover-upload-btn',
+                '.upload-cover-btn',
+                '[class*="cover"][class*="upload"]',
+                '.cover-area',
+                '.cover-container'
+            ];
+
+            for (const btnSelector of coverButtonSelectors) {
+                try {
+                    if (btnSelector.includes(':contains')) {
+                        const text = btnSelector.match(/contains\("([^"]+)"/)[1];
+                        const coverBtn = await currentPage.evaluateHandle((text) => {
+                            const buttons = Array.from(document.querySelectorAll('*'));
+                            return buttons.find(btn => btn.textContent && btn.textContent.includes(text));
+                        }, text);
+
+                        if (coverBtn && await coverBtn.asElement()) {
+                            await coverBtn.click();
+                            console.log(`🖱️ 点击封面按钮: ${text}`);
+                            await setTimeout(2000);
+                            break;
+                        }
+                    } else {
+                        const coverBtn = await currentPage.$(btnSelector);
+                        if (coverBtn) {
+                            await coverBtn.click();
+                            console.log(`🖱️ 点击封面按钮: ${btnSelector}`);
+                            await setTimeout(2000);
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    continue;
+                }
+            }
+
+            // 重新查找input
+            coverInput = await currentPage.$('input[type="file"][accept*="image"]');
+        }
+
+        if (!coverInput) {
+            console.log('⚠️ 无法找到封面上传元素，跳过封面上传');
+            return;
+        }
+
+        // 上传封面文件
+        console.log('📤 开始上传封面文件...');
+        await coverInput.uploadFile(coverFile.path);
+        
+        console.log('⏳ 等待封面上传处理...');
+        await setTimeout(3000);
+
+        // 等待封面上传完成
+        try {
+            await currentPage.waitForFunction(() => {
+                // 检查封面上传完成的标识
+                const indicators = [
+                    document.querySelector('.cover-success'),
+                    document.querySelector('[class*="cover"][class*="success"]'),
+                    document.querySelector('img[src*="cover"]'), // 封面预览图
+                ];
+                return indicators.some(el => el !== null);
+            }, { timeout: 30000 });
+
+            console.log('✅ 封面上传完成');
+        } catch (e) {
+            console.log('⚠️ 未检测到明确的封面上传完成标识，继续后续流程...');
+        }
+
+    } catch (error) {
+        console.error('❌ 封面文件上传失败:', error);
+        console.log('⚠️ 封面上传失败，继续视频投稿流程...');
+        // 不抛出错误，让投稿流程继续
+    }
+}
+
 // 替换原来的 performAutomatedUpload 函数
 async function performAutomatedUpload(videoFile, metadata) {
     try {
@@ -210,17 +344,23 @@ async function performAutomatedUpload(videoFile, metadata) {
 
         // 替换 waitForTimeout 为 setTimeout
         console.log('⏳ 等待页面完全加载...');
-        await setTimeout(3000); // 等待3秒
+        // await setTimeout(1000); // 等待1秒
 
         // 第2步：上传视频文件
         console.log('📁 Step 2: 上传视频文件');
         await uploadVideoFile(videoFile);
 
-        // 第3步：填写视频信息
+        // 第3步：上传封面文件（新增）
+        if (metadata.coverFile) {
+            console.log('🖼️ Step 3: 上传封面文件');
+            await uploadCoverFile(metadata.coverFile);
+        }
+
+        // 第4步：填写视频信息
         console.log('✏️ Step 3: 填写视频信息');
         await fillVideoInformation(metadata);
 
-        // 第4步：等待用户预览和确认
+        // 第5步：等待用户预览和确认
         console.log('👀 Step 4: 等待用户预览确认');
         const confirmed = await waitForUserConfirmation();
 
@@ -231,7 +371,7 @@ async function performAutomatedUpload(videoFile, metadata) {
             };
         }
 
-        // 第5步：自动提交
+        // 第6步：自动提交
         console.log('🎯 Step 5: 自动提交投稿');
         const submitResult = await submitVideo();
 
@@ -278,7 +418,7 @@ async function fillVideoInformation(metadata) {
         console.log('📝 开始填写视频信息...');
 
         // 等待页面稳定
-        await setTimeout(2000);
+        await setTimeout(1000);
 
         // 填写标题 - 使用更多选择器
         const titleSelectors = [
@@ -461,50 +601,127 @@ async function submitVideo() {
     try {
         console.log('🎯 开始提交投稿...');
 
-        // 查找并点击投稿按钮
+        // 更新的投稿按钮选择器 - 按优先级排序
         const submitSelectors = [
-            'button[class*="submit"]',
-            'button.submit-add',
-            '.submit-btn',
-            '.publish-btn',
-            'button:contains("立即投稿")',
-            'button:contains("投稿")',
-            '[class*="submit"][class*="btn"]'
+            'span.submit-add',                           // 最精确的选择器
+            'span[data-reporter-id="29"]',               // 基于data属性
+            '.submit-add',                               // 基于class名
+            'span:contains("立即投稿")',                  // 基于文本内容（需要特殊处理）
+            'span:contains("投稿")',                     // 更宽泛的文本匹配
+            '.submit-btn',                               // 备用选择器
+            '.publish-btn',                              // 备用选择器
+            '[class*="submit"]'                          // 包含submit的class
         ];
 
         let submitSuccess = false;
 
         for (const selector of submitSelectors) {
             try {
-                // 对于 :contains 选择器，需要特殊处理
+                // 特殊处理文本内容选择器
                 if (selector.includes(':contains')) {
                     const text = selector.match(/contains\("([^"]+)"/)[1];
+                    console.log(`🔍 尝试按文本查找按钮: "${text}"`);
+                    
                     const submitButton = await currentPage.evaluateHandle((text) => {
-                        const buttons = Array.from(document.querySelectorAll('button'));
-                        return buttons.find(btn => btn.textContent.includes(text));
+                        const elements = Array.from(document.querySelectorAll('span, button'));
+                        return elements.find(el => el.textContent?.includes(text));
                     }, text);
 
-                    if (submitButton.asElement()) {
+                    if (submitButton && await submitButton.asElement()) {
+                        console.log(`🚀 找到投稿按钮 (文本匹配): ${text}`);
                         await submitButton.click();
                         submitSuccess = true;
-                        console.log(`🚀 投稿按钮已点击: ${selector}`);
                         break;
                     }
                 } else {
-                    await currentPage.waitForSelector(selector, { timeout: 2000 });
-                    await currentPage.click(selector);
-                    submitSuccess = true;
-                    console.log(`🚀 投稿按钮已点击: ${selector}`);
-                    break;
+                    // 常规CSS选择器
+                    console.log(`🔍 尝试选择器: ${selector}`);
+                    
+                    // 等待元素出现，但不要等太久
+                    await currentPage.waitForSelector(selector, { timeout: 3000 });
+                    
+                    // 检查元素是否可见和可点击
+                    const isVisible = await currentPage.evaluate((sel) => {
+                        const el = document.querySelector(sel);
+                        if (!el) return false;
+                        
+                        const style = window.getComputedStyle(el);
+                        return style.display !== 'none' && 
+                               style.visibility !== 'hidden' && 
+                               style.opacity !== '0';
+                    }, selector);
+                    
+                    if (isVisible) {
+                        await currentPage.click(selector);
+                        submitSuccess = true;
+                        console.log(`🚀 投稿按钮已点击: ${selector}`);
+                        break;
+                    } else {
+                        console.log(`⚠️ 元素存在但不可见: ${selector}`);
+                    }
                 }
             } catch (e) {
-                console.log(`⚠️ 投稿按钮选择器 ${selector} 失败，尝试下一个...`);
+                console.log(`⚠️ 选择器失败 ${selector}: ${e.message}`);
                 continue;
             }
         }
 
         if (!submitSuccess) {
+            console.log('⚠️ 所有选择器都失败，尝试最后的备用方案...');
+            
+            // 最后的备用方案：查找所有可能的提交元素
+            try {
+                const found = await currentPage.evaluate(() => {
+                    const keywords = ['立即投稿', '投稿', '提交', '发布'];
+                    const selectors = ['span', 'button', 'div[role="button"]', '[class*="submit"]', '[class*="publish"]'];
+                    
+                    for (const sel of selectors) {
+                        const elements = document.querySelectorAll(sel);
+                        for (const el of elements) {
+                            const text = el.textContent?.trim();
+                            if (keywords.some(keyword => text?.includes(keyword))) {
+                                el.click();
+                                return { success: true, text, selector: sel };
+                            }
+                        }
+                    }
+                    return { success: false };
+                });
+                
+                if (found.success) {
+                    submitSuccess = true;
+                    console.log(`🚀 备用方案成功: 点击了包含"${found.text}"的${found.selector}元素`);
+                }
+            } catch (e) {
+                console.log('❌ 备用方案也失败了:', e.message);
+            }
+        }
+
+        if (!submitSuccess) {
             console.log('⚠️ 未找到投稿按钮，请用户手动点击投稿');
+            
+            // 在页面上显示提示
+            await currentPage.evaluate(() => {
+                const tip = document.createElement('div');
+                tip.style.cssText = `
+                    position: fixed;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    background: #ff9800;
+                    color: white;
+                    padding: 20px;
+                    border-radius: 8px;
+                    z-index: 999999;
+                    font-size: 16px;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                `;
+                tip.textContent = '⚠️ 请手动点击"立即投稿"按钮完成投稿';
+                document.body.appendChild(tip);
+                
+                setTimeout(() => tip.remove(), 10000); // 10秒后自动消失
+            });
+            
             return {
                 success: true,
                 message: '视频信息已填写完成，请手动点击"立即投稿"按钮完成投稿',
@@ -519,7 +736,8 @@ async function submitVideo() {
                 return document.querySelector('.success, .complete, [class*="success"]') ||
                     window.location.href.includes('/video/') ||
                     document.querySelector('[class*="result"]') ||
-                    document.querySelector('.upload-result');
+                    document.querySelector('.upload-result') ||
+                    document.querySelector('[class*="complete"]');
             }, { timeout: 60000 });
 
             console.log('🎉 投稿提交完成！');
