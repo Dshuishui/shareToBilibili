@@ -304,23 +304,77 @@ async function uploadCoverFile(coverFile) {
         await coverInput.uploadFile(coverFile.path);
         
         console.log('⏳ 等待封面上传处理...');
-        await setTimeout(3000);
+        await setTimeout(2000);
+
+        console.log('🔍 检查是否出现封面编辑弹窗...');
 
         // 等待封面上传完成
         try {
-            await currentPage.waitForFunction(() => {
-                // 检查封面上传完成的标识
-                const indicators = [
-                    document.querySelector('.cover-success'),
-                    document.querySelector('[class*="cover"][class*="success"]'),
-                    document.querySelector('img[src*="cover"]'), // 封面预览图
-                ];
-                return indicators.some(el => el !== null);
-            }, { timeout: 30000 });
+            // 等待"完成"按钮出现
+            const completeButtonSelectors = [
+                'button:contains("完成")',
+                '.complete-btn',
+                '.finish-btn',
+                'button[class*="complete"]',
+                'button[class*="finish"]',
+                '.cover-complete-btn'
+            ];
 
-            console.log('✅ 封面上传完成');
+            let completed = false;
+            for (const selector of completeButtonSelectors) {
+                try {
+                    if (selector.includes(':contains')) {
+                        const text = selector.match(/contains\("([^"]+)"/)[1];
+                        
+                        // 等待按钮出现
+                        const button = await currentPage.waitForFunction((text) => {
+                            const buttons = Array.from(document.querySelectorAll('button, div[role="button"], span[role="button"]'));
+                            return buttons.find(btn => btn.textContent && btn.textContent.includes(text));
+                        }, { timeout: 10000 }, text);
+
+                        if (button) {
+                            console.log(`🖱️ 找到"${text}"按钮，准备点击...`);
+                            
+                            // 点击完成按钮
+                            await currentPage.evaluate((text) => {
+                                const buttons = Array.from(document.querySelectorAll('button, div[role="button"], span[role="button"]'));
+                                const btn = buttons.find(b => b.textContent && b.textContent.includes(text));
+                                if (btn) btn.click();
+                            }, text);
+                            
+                            console.log(`✅ 已自动点击"${text}"按钮`);
+                            completed = true;
+                            break;
+                        }
+                    } else {
+                        await currentPage.waitForSelector(selector, { timeout: 5000 });
+                        await currentPage.click(selector);
+                        console.log(`✅ 已自动点击完成按钮: ${selector}`);
+                        completed = true;
+                        break;
+                    }
+                } catch (e) {
+                    continue;
+                }
+            }
+
+            if (completed) {
+                console.log('⏳ 等待封面设置完成...');
+                await setTimeout(2000);
+                
+                // 等待弹窗关闭
+                await currentPage.waitForFunction(() => {
+                    const modal = document.querySelector('.ant-modal, .el-dialog, [class*="modal"], [class*="dialog"]');
+                    return !modal || modal.style.display === 'none';
+                }, { timeout: 10000 });
+                
+                console.log('✅ 封面设置完成，弹窗已关闭');
+            } else {
+                console.log('⚠️ 未找到完成按钮，用户可能需要手动操作');
+            }
+
         } catch (e) {
-            console.log('⚠️ 未检测到明确的封面上传完成标识，继续后续流程...');
+            console.log('⚠️ 封面编辑弹窗处理超时，继续流程...');
         }
 
     } catch (error) {
@@ -364,10 +418,18 @@ async function performAutomatedUpload(videoFile, metadata) {
         console.log('👀 Step 4: 等待用户预览确认');
         const confirmed = await waitForUserConfirmation();
 
-        if (!confirmed) {
+        if (confirmed === false) {
             return {
                 success: false,
                 message: '用户取消了投稿'
+            };
+        }
+        
+        if (confirmed === 'manual') {
+            return {
+                success: true,
+                message: '已完成信息填写，请手动检查并点击"立即投稿"按钮完成投稿',
+                url: currentPage.url()
             };
         }
 
@@ -514,18 +576,15 @@ async function fillVideoInformation(metadata) {
     }
 }
 
-// 修复 waitForUserConfirmation 函数
+// 修改 waitForUserConfirmation 函数
 async function waitForUserConfirmation() {
     try {
         console.log('⏳ 等待用户预览和确认...');
 
-        // 在页面上注入确认对话框
         await currentPage.evaluate(() => {
-            // 移除可能存在的旧对话框
             const oldModal = document.getElementById('auto-upload-confirm');
             if (oldModal) oldModal.remove();
 
-            // 创建确认对话框
             const modal = document.createElement('div');
             modal.id = 'auto-upload-confirm';
             modal.style.cssText = `
@@ -540,25 +599,30 @@ async function waitForUserConfirmation() {
                 z-index: 999999;
                 text-align: center;
                 border: 3px solid #00a1d6;
-                max-width: 400px;
+                max-width: 450px;
                 font-family: Arial, sans-serif;
             `;
 
             modal.innerHTML = `
-                <h3 style="color: #00a1d6; margin: 0 0 15px 0; font-size: 18px;">🤖 自动化投稿确认</h3>
-                <p style="margin: 10px 0; color: #333; line-height: 1.5;">
-                    请检查视频信息是否正确：<br>
-                    • 标题是否准确<br>
-                    • 简介和标签是否合适<br>
-                    • 分区选择是否正确<br>
-                    • 封面是否满意
+                <h3 style="color: #00a1d6; margin: 0 0 15px 0; font-size: 18px;">🤖 XBuilder自动投稿确认</h3>
+                <div style="text-align: left; margin: 15px 0; padding: 15px; background: #f8f9fa; border-radius: 6px;">
+                    <p style="margin: 5px 0; color: #333; font-size: 14px;">
+                        ✅ <strong>视频已上传</strong>：录屏内容已上传完成<br>
+                        ✅ <strong>封面已设置</strong>：使用项目缩略图作为封面<br>
+                        ✅ <strong>信息已填写</strong>：标题、描述、标签已自动填写<br>
+                        ✅ <strong>分区已选择</strong>：已选择"游戏"分区
+                    </p>
+                </div>
+                <p style="margin: 15px 0; color: #666; line-height: 1.5; font-size: 14px;">
+                    请检查以上信息是否正确。确认无误后点击"确认投稿"将自动提交到B站。
                 </p>
                 <div style="margin: 25px 0;">
                     <button id="confirm-upload" style="background: #52c41a; color: white; border: none; padding: 12px 24px; border-radius: 6px; margin-right: 15px; cursor: pointer; font-size: 16px; font-weight: bold;">✅ 确认投稿</button>
+                    <button id="manual-adjust" style="background: #1890ff; color: white; border: none; padding: 12px 24px; border-radius: 6px; margin-right: 15px; cursor: pointer; font-size: 16px;">🔧 手动调整</button>
                     <button id="cancel-upload" style="background: #ff4d4f; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: bold;">❌ 取消</button>
                 </div>
                 <p style="font-size: 12px; color: #666; margin: 0;">
-                    确认后将自动点击"立即投稿"按钮
+                    点击"手动调整"将停止自动化，您可以手动修改后点击投稿按钮
                 </p>
             `;
 
@@ -570,26 +634,32 @@ async function waitForUserConfirmation() {
                 document.body.removeChild(modal);
             };
 
+            document.getElementById('manual-adjust').onclick = () => {
+                window.autoUploadConfirmed = 'manual';
+                document.body.removeChild(modal);
+            };
+
             document.getElementById('cancel-upload').onclick = () => {
                 window.autoUploadConfirmed = false;
                 document.body.removeChild(modal);
             };
 
-            // 重置确认状态
             window.autoUploadConfirmed = undefined;
         });
 
-        console.log('💡 确认对话框已显示，等待用户选择...');
-
-        // 等待用户做出选择
         await currentPage.waitForFunction(() => {
             return window.autoUploadConfirmed !== undefined;
-        }, { timeout: 300000 }); // 5分钟超时
+        }, { timeout: 300000 });
 
-        const confirmed = await currentPage.evaluate(() => window.autoUploadConfirmed);
+        const result = await currentPage.evaluate(() => window.autoUploadConfirmed);
 
-        console.log(confirmed ? '✅ 用户确认投稿' : '❌ 用户取消投稿');
-        return confirmed;
+        if (result === 'manual') {
+            console.log('🔧 用户选择手动调整，停止自动化流程');
+            return 'manual';
+        }
+
+        console.log(result ? '✅ 用户确认投稿' : '❌ 用户取消投稿');
+        return result;
 
     } catch (error) {
         console.error('❌ 等待用户确认超时或出错:', error);
