@@ -11,10 +11,10 @@ async def test_upload():
     
     # 1. 设置你的Cookie信息（请替换为真实值）
     credential = Credential(
-        sessdata="f458d8e2%2C1769222732%2C4dc77%2A71CjDfhRYUm5m0tzEOkNideOpRzguxD0jx7KHwv79iTGEhqA4F5xmRskD9Dr4h9iTHX3MSVk1sMEZ2RzV1QTYyMHYxTmhkcWhoaXIyTEYxRnpRWkNGMF82V2RCU3ZKbzlDc1dNbTZlZHdFNDl1Q1dENm1ZTkhlYWE1ZXFWaWU1VWxvbVVIUTlsd19nIIEC",  # 替换为真实值
-        bili_jct="c0bb21664c53cf809109a3b2927c9038",   # 替换为真实值
-        buvid3="24F266EC-E5DD-ED8F-ECBF-8987BE09742641289infoc",       # 替换为真实值
-        dedeuserid="476417594"  # 可选，替换为真实值
+        sessdata="XXX",  # 替换为真实值
+        bili_jct="XX",   # 替换为真实值
+        buvid3="XXX",       # 替换为真实值
+        dedeuserid="XXX"  # 可选，替换为真实值
     )
     
     # 2. 设置本地视频文件路径（请确保文件存在）
