@@ -474,22 +474,23 @@ async function uploadVideoFile(videoFile) {
     }
 }
 
-// 修复 fillVideoInformation 函数
+// 修复后的 fillVideoInformation 函数
 async function fillVideoInformation(metadata) {
     try {
         console.log('📝 开始填写视频信息...');
 
         // 等待页面稳定
-        await setTimeout(1000);
+        await setTimeout(2000);
 
-        // 填写标题 - 使用更多选择器
+        // 1. 填写标题 - 使用更多选择器
         const titleSelectors = [
             'input[placeholder*="标题"]',
             'input[placeholder*="title"]',
             '.title-input input',
             '.video-title input',
             'input.input[maxlength="80"]',
-            '.form-item input[type="text"]'
+            '.form-item input[type="text"]',
+            'input[data-v-96d570d0]' // 添加B站特有的data-v属性选择器
         ];
 
         let titleFilled = false;
@@ -515,55 +516,216 @@ async function fillVideoInformation(metadata) {
             console.log('⚠️ 标题填写失败，用户需要手动填写');
         }
 
-        // 填写简介
+        // 2. 填写简介 - 根据新的HTML结构
         if (metadata.description) {
+            console.log('📝 开始填写简介...');
+            
+            // 新的简介选择器，基于你提供的HTML结构
             const descSelectors = [
-                'textarea[placeholder*="简介"]',
-                'textarea[placeholder*="描述"]',
-                '.desc-input textarea',
-                '.video-desc textarea',
-                'textarea[maxlength="2000"]'
+                '.ql-editor[contenteditable="true"]', // Quill编辑器
+                '.ql-editor', // Quill编辑器通用选择器
+                'div[contenteditable="true"][data-placeholder*="填写更全面的相关信息"]', // 精确匹配
+                '.archive-info-editor .ql-editor', // 更具体的路径
+                '[data-placeholder*="填写更全面的相关信息"]' // 基于placeholder文本
             ];
 
+            let descFilled = false;
             for (const selector of descSelectors) {
                 try {
                     await currentPage.waitForSelector(selector, { timeout: 3000 });
-                    await currentPage.click(selector, { clickCount: 3 });
-                    await currentPage.keyboard.press('Backspace');
+                    
+                    // 对于contenteditable的元素，需要特殊处理
+                    await currentPage.click(selector);
+                    await setTimeout(500);
+                    
+                    // 清空内容
+                    await currentPage.evaluate((sel) => {
+                        const element = document.querySelector(sel);
+                        if (element) {
+                            element.innerHTML = '';
+                            element.textContent = '';
+                            element.focus();
+                        }
+                    }, selector);
+                    
+                    // 输入新内容
                     await currentPage.type(selector, metadata.description, { delay: 50 });
+                    
                     console.log('✅ 简介已填写');
+                    descFilled = true;
                     break;
                 } catch (e) {
+                    console.log(`⚠️ 简介选择器 ${selector} 失败，尝试下一个...`);
                     continue;
+                }
+            }
+            
+            if (!descFilled) {
+                console.log('⚠️ 简介填写失败，尝试备用方法...');
+                
+                // 备用方法：通过JavaScript直接操作
+                try {
+                    await currentPage.evaluate((description) => {
+                        // 查找Quill编辑器实例
+                        const quilleditor = document.querySelector('.ql-editor');
+                        if (quilleditor) {
+                            quilleditor.innerHTML = `<p>${description}</p>`;
+                            quilleditor.dispatchEvent(new Event('input', { bubbles: true }));
+                            console.log('通过JS直接设置简介成功');
+                            return true;
+                        }
+                        return false;
+                    }, metadata.description);
+                } catch (e) {
+                    console.log('⚠️ 备用简介填写方法也失败了');
                 }
             }
         }
 
-        // 填写标签
-        if (metadata.tags) {
-            const tagSelectors = [
-                'input[placeholder*="标签"]',
-                '.tag-input input',
-                '.tags-input input'
+        // 3. 设置分区为"游戏"
+        console.log('🎮 开始设置分区为"游戏"...');
+        try {
+            // 查找分区选择器
+            const categorySelectors = [
+                '.select-controller', // 基于你提供的HTML结构
+                '.video-human-type .select-container',
+                '.selector-container .select-container',
+                '.select-item-cont'
             ];
 
-            const tagList = metadata.tags.split(',').map(tag => tag.trim()).filter(tag => tag);
-
-            for (const selector of tagSelectors) {
+            let categorySet = false;
+            for (const selector of categorySelectors) {
                 try {
                     await currentPage.waitForSelector(selector, { timeout: 3000 });
-
-                    for (const tag of tagList) {
-                        await currentPage.click(selector);
-                        await currentPage.type(selector, tag, { delay: 100 });
-                        await currentPage.keyboard.press('Enter');
-                        await setTimeout(500);
+                    
+                    // 点击分区选择器打开下拉菜单
+                    await currentPage.click(selector);
+                    await setTimeout(1000);
+                    
+                    // 查找"游戏"选项
+                    const gameOptionSelectors = [
+                        'div:contains("游戏")', // 需要特殊处理
+                        '.select-option:contains("游戏")',
+                        '[data-value="game"]',
+                        '[data-value="4"]' // B站游戏分区ID
+                    ];
+                    
+                    // 处理文本内容选择
+                    const gameSelected = await currentPage.evaluate(() => {
+                        // 查找包含"游戏"文本的元素
+                        const allElements = Array.from(document.querySelectorAll('div, span, li, option'));
+                        const gameElement = allElements.find(el => 
+                            el.textContent && el.textContent.trim() === '游戏'
+                        );
+                        
+                        if (gameElement) {
+                            gameElement.click();
+                            return true;
+                        }
+                        return false;
+                    });
+                    
+                    if (gameSelected) {
+                        console.log('✅ 游戏分区已选择');
+                        categorySet = true;
+                        await setTimeout(1000);
+                        break;
                     }
-                    console.log('✅ 标签已填写');
-                    break;
+                    
                 } catch (e) {
+                    console.log(`⚠️ 分区选择器 ${selector} 失败，尝试下一个...`);
                     continue;
                 }
+            }
+            
+            if (!categorySet) {
+                console.log('⚠️ 自动设置游戏分区失败，用户需要手动选择');
+            }
+            
+        } catch (error) {
+            console.log('⚠️ 分区设置出错，用户需要手动选择');
+        }
+
+        // 4. 填写标签 - 需要先清空现有标签
+        if (metadata.tags) {
+            console.log('🏷️ 开始处理标签...');
+            
+            try {
+                // 首先清空现有标签
+                console.log('🗑️ 清空现有标签...');
+                await currentPage.evaluate(() => {
+                    // 查找并删除现有标签
+                    const existingTags = document.querySelectorAll('.tag-item, .selected-tag, [class*="tag"][class*="item"]');
+                    existingTags.forEach(tag => {
+                        const deleteBtn = tag.querySelector('.delete-btn, .remove-btn, .close-btn, [class*="delete"], [class*="remove"], [class*="close"]');
+                        if (deleteBtn) {
+                            deleteBtn.click();
+                        } else {
+                            // 如果没有删除按钮，尝试其他方法
+                            tag.remove();
+                        }
+                    });
+                });
+                
+                await setTimeout(1000);
+                
+                // 查找标签输入框
+                const tagSelectors = [
+                    'input[placeholder*="标签"]',
+                    '.tag-input input',
+                    '.tags-input input',
+                    'input[data-v-16d95b77]', // 基于data-v属性
+                    '.section-title-content-main + .tag-input input' // 基于标题后的输入框
+                ];
+
+                const tagList = metadata.tags.split(',').map(tag => tag.trim()).filter(tag => tag);
+                console.log('📝 准备添加标签:', tagList);
+
+                let tagsFilled = false;
+                for (const selector of tagSelectors) {
+                    try {
+                        await currentPage.waitForSelector(selector, { timeout: 3000 });
+
+                        for (const tag of tagList) {
+                            console.log(`🏷️ 添加标签: ${tag}`);
+                            
+                            // 点击输入框
+                            await currentPage.click(selector);
+                            await setTimeout(300);
+                            
+                            // 清空输入框
+                            await currentPage.evaluate((sel) => {
+                                const input = document.querySelector(sel);
+                                if (input) {
+                                    input.value = '';
+                                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                                }
+                            }, selector);
+                            
+                            // 输入标签
+                            await currentPage.type(selector, tag, { delay: 100 });
+                            await setTimeout(500);
+                            
+                            // 按回车确认标签
+                            await currentPage.keyboard.press('Enter');
+                            await setTimeout(800);
+                        }
+                        
+                        console.log('✅ 标签已填写');
+                        tagsFilled = true;
+                        break;
+                    } catch (e) {
+                        console.log(`⚠️ 标签选择器 ${selector} 失败，尝试下一个...`);
+                        continue;
+                    }
+                }
+                
+                if (!tagsFilled) {
+                    console.log('⚠️ 标签填写失败，用户需要手动添加');
+                }
+                
+            } catch (error) {
+                console.log('⚠️ 标签处理出错:', error.message);
             }
         }
 
