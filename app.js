@@ -699,81 +699,60 @@ async function fillVideoInformation(metadata) {
         // 4. 填写标签 - 需要先清空现有标签
         if (metadata.tags) {
             console.log('🏷️ 开始处理标签...');
-
+            
             try {
-                // 首先清空现有标签
-                console.log('🗑️ 清空现有标签...');
+                // 等待标签区域加载
+                await currentPage.waitForSelector('.tag-input-wrp', { timeout: 10000 });
+                
+                console.log('🗑️ 清空现有的B站自动识别标签...');
+                
+                // 方案：直接清空 .tag-pre-wrp 容器内的所有元素
                 await currentPage.evaluate(() => {
-                    // 查找并删除现有标签
-                    const existingTags = document.querySelectorAll('.tag-item, .selected-tag, [class*="tag"][class*="item"]');
-                    existingTags.forEach(tag => {
-                        const deleteBtn = tag.querySelector('.delete-btn, .remove-btn, .close-btn, [class*="delete"], [class*="remove"], [class*="close"]');
-                        if (deleteBtn) {
-                            deleteBtn.click();
-                        } else {
-                            // 如果没有删除按钮，尝试其他方法
-                            tag.remove();
-                        }
-                    });
-                });
-
-                await setTimeout(1000);
-
-                // 查找标签输入框
-                const tagSelectors = [
-                    'input[placeholder*="标签"]',
-                    '.tag-input input',
-                    '.tags-input input',
-                    'input[data-v-16d95b77]', // 基于data-v属性
-                    '.section-title-content-main + .tag-input input' // 基于标题后的输入框
-                ];
-
-                const tagList = metadata.tags.split(',').map(tag => tag.trim()).filter(tag => tag);
-                console.log('📝 准备添加标签:', tagList);
-
-                let tagsFilled = false;
-                for (const selector of tagSelectors) {
-                    try {
-                        await currentPage.waitForSelector(selector, { timeout: 3000 });
-
-                        for (const tag of tagList) {
-                            console.log(`🏷️ 添加标签: ${tag}`);
-
-                            // 点击输入框
-                            await currentPage.click(selector);
-                            await setTimeout(300);
-
-                            // 清空输入框
-                            await currentPage.evaluate((sel) => {
-                                const input = document.querySelector(sel);
-                                if (input) {
-                                    input.value = '';
-                                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                                }
-                            }, selector);
-
-                            // 输入标签
-                            await currentPage.type(selector, tag, { delay: 100 });
-                            await setTimeout(500);
-
-                            // 按回车确认标签
-                            await currentPage.keyboard.press('Enter');
-                            await setTimeout(800);
-                        }
-
-                        console.log('✅ 标签已填写');
-                        tagsFilled = true;
-                        break;
-                    } catch (e) {
-                        console.log(`⚠️ 标签选择器 ${selector} 失败，尝试下一个...`);
-                        continue;
+                    const tagContainer = document.querySelector('.tag-pre-wrp');
+                    if (tagContainer) {
+                        // 直接清空容器内的所有标签元素
+                        tagContainer.innerHTML = '';
+                        console.log('✅ 已清空所有现有标签');
                     }
+                });
+                
+                await setTimeout(500); // 等待DOM更新
+                
+                // 现在添加我们的标签
+                const tagInput = await currentPage.$('.input-val[placeholder*="回车"]') || 
+                                await currentPage.$('.tag-input-wrp input[type="text"]');
+                
+                if (tagInput) {
+                    const tagList = metadata.tags.split(',').map(tag => tag.trim()).filter(tag => tag);
+                    console.log('📝 准备添加标签:', tagList);
+        
+                    for (const tag of tagList) {
+                        console.log(`🏷️ 添加标签: ${tag}`);
+                        
+                        // 点击输入框激活
+                        await tagInput.click();
+                        await setTimeout(200);
+                        
+                        // 清空输入框
+                        await currentPage.evaluate((input) => {
+                            input.value = '';
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                        }, tagInput);
+                        
+                        // 输入标签文本
+                        await tagInput.type(tag, { delay: 50 });
+                        await setTimeout(300);
+                        
+                        // 按回车创建标签
+                        await currentPage.keyboard.press('Enter');
+                        await setTimeout(800); // 等待标签创建完成
+                    }
+                    
+                    console.log('✅ 所有标签已添加完成');
+                } else {
+                    console.log('⚠️ 未找到标签输入框');
                 }
-
-                if (!tagsFilled) {
-                    console.log('⚠️ 标签填写失败，用户需要手动添加');
-                }
-
+                
             } catch (error) {
                 console.log('⚠️ 标签处理出错:', error.message);
             }
