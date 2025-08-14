@@ -15,14 +15,14 @@ const PYTHON_BACKEND = 'http://localhost:5001';
 // 添加CORS配置 - 在其他中间件之前
 app.use(cors({
     origin: [
-      'http://localhost:5173', // XBuilder开发服务器
-      'http://localhost:3000', // 允许同源请求
-      // 如果有其他需要的域名可以继续添加
+        'http://localhost:5173', // XBuilder开发服务器
+        'http://localhost:3000', // 允许同源请求
+        // 如果有其他需要的域名可以继续添加
     ],
     credentials: true, // 允许携带cookies
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
-  }));
+}));
 
 // 分区ID映射 - B站真实分区ID
 const CATEGORY_MAP = {
@@ -94,15 +94,39 @@ app.get('/login', async (req, res) => {
             args: [
                 '--start-maximized',
                 '--no-sandbox',
-                '--disable-setuid-sandbox'
+                '--disable-setuid-sandbox',
+                '--disable-notifications',           // 核心：禁用通知
+                '--disable-web-security',
+                '--autoplay-policy=no-user-gesture-required',
+                '--disable-permissions-api'         // 禁用权限API
             ],
             executablePath: process.platform === 'darwin'
                 ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-                : undefined
+                : undefined,
+            // userDataDir: './chrome-user-data'      // 保持用户数据
+        });
+
+        // 添加浏览器关闭事件监听
+        browser.on('disconnected', () => {
+            console.log('🔒 检测到浏览器已关闭');
+            browser = null;
+            currentPage = null;
         });
 
         const page = await browser.newPage();
         currentPage = page;
+
+        // 设置权限策略
+        const context = browser.defaultBrowserContext();
+        await context.overridePermissions('https://member.bilibili.com', [
+            'notifications'
+        ]);
+
+        // 添加页面关闭事件监听
+        page.on('close', () => {
+            console.log('📄 检测到页面已关闭');
+            currentPage = null;
+        });
 
         // 跳转到B站登录页面
         await page.goto('https://passport.bilibili.com/login', {
@@ -187,10 +211,13 @@ app.post('/auto-upload', upload.fields([
             });
         }
 
-        if (!browser || !currentPage) {
+        // 检查浏览器是否真正可用
+        const browserAlive = await isBrowserAlive();
+        if (!browserAlive) {
             return res.json({
                 success: false,
-                message: '浏览器未准备就绪，请先完成B站登录'
+                message: '浏览器连接已断开，请重新登录B站账号',
+                needRelogin: true
             });
         }
 
@@ -217,6 +244,24 @@ app.post('/auto-upload', upload.fields([
 // 在文件顶部添加辅助函数
 const { setTimeout } = require('timers/promises');
 
+// 检查浏览器是否真正可用
+async function isBrowserAlive() {
+    if (!browser || !currentPage) {
+        return false;
+    }
+
+    try {
+        // 尝试获取页面URL来测试连接是否有效
+        await currentPage.url();
+        return true;
+    } catch (error) {
+        // 如果出错，说明浏览器已经断开
+        console.log('🔍 检测到浏览器连接已断开:', error.message);
+        browser = null;
+        currentPage = null;
+        return false;
+    }
+}
 
 // 上传封面文件 - 新增函数
 async function uploadCoverFile(coverFile) {
@@ -233,7 +278,7 @@ async function uploadCoverFile(coverFile) {
         ];
 
         let coverInput = null;
-        
+
         // 首先尝试直接查找封面上传input
         for (const selector of coverUploadSelectors) {
             try {
@@ -302,7 +347,7 @@ async function uploadCoverFile(coverFile) {
         // 上传封面文件
         console.log('📤 开始上传封面文件...');
         await coverInput.uploadFile(coverFile.path);
-        
+
         console.log('⏳ 等待封面上传处理...');
         await setTimeout(2000);
 
@@ -325,7 +370,7 @@ async function uploadCoverFile(coverFile) {
                 try {
                     if (selector.includes(':contains')) {
                         const text = selector.match(/contains\("([^"]+)"/)[1];
-                        
+
                         // 等待按钮出现
                         const button = await currentPage.waitForFunction((text) => {
                             const buttons = Array.from(document.querySelectorAll('button, div[role="button"], span[role="button"]'));
@@ -334,14 +379,14 @@ async function uploadCoverFile(coverFile) {
 
                         if (button) {
                             console.log(`🖱️ 找到"${text}"按钮，准备点击...`);
-                            
+
                             // 点击完成按钮
                             await currentPage.evaluate((text) => {
                                 const buttons = Array.from(document.querySelectorAll('button, div[role="button"], span[role="button"]'));
                                 const btn = buttons.find(b => b.textContent && b.textContent.includes(text));
                                 if (btn) btn.click();
                             }, text);
-                            
+
                             console.log(`✅ 已自动点击"${text}"按钮`);
                             completed = true;
                             break;
@@ -361,13 +406,13 @@ async function uploadCoverFile(coverFile) {
             if (completed) {
                 console.log('⏳ 等待封面设置完成...');
                 await setTimeout(2000);
-                
+
                 // 等待弹窗关闭
                 await currentPage.waitForFunction(() => {
                     const modal = document.querySelector('.ant-modal, .el-dialog, [class*="modal"], [class*="dialog"]');
                     return !modal || modal.style.display === 'none';
                 }, { timeout: 10000 });
-                
+
                 console.log('✅ 封面设置完成，弹窗已关闭');
             } else {
                 console.log('⚠️ 未找到完成按钮，用户可能需要手动操作');
@@ -387,6 +432,11 @@ async function uploadCoverFile(coverFile) {
 // 替换原来的 performAutomatedUpload 函数
 async function performAutomatedUpload(videoFile, metadata) {
     try {
+
+        const browserAlive = await isBrowserAlive();
+        if (!browserAlive) {
+            throw new Error('浏览器连接已断开，请重新登录B站账号');
+        }
         console.log('🚀 开始自动化投稿流程...');
 
         // 第1步：导航到B站投稿页面
@@ -424,7 +474,7 @@ async function performAutomatedUpload(videoFile, metadata) {
                 message: '用户取消了投稿'
             };
         }
-        
+
         if (confirmed === 'manual') {
             return {
                 success: true,
@@ -519,7 +569,7 @@ async function fillVideoInformation(metadata) {
         // 2. 填写简介 - 根据新的HTML结构
         if (metadata.description) {
             console.log('📝 开始填写简介...');
-            
+
             // 新的简介选择器，基于你提供的HTML结构
             const descSelectors = [
                 '.ql-editor[contenteditable="true"]', // Quill编辑器
@@ -533,11 +583,11 @@ async function fillVideoInformation(metadata) {
             for (const selector of descSelectors) {
                 try {
                     await currentPage.waitForSelector(selector, { timeout: 3000 });
-                    
+
                     // 对于contenteditable的元素，需要特殊处理
                     await currentPage.click(selector);
                     await setTimeout(500);
-                    
+
                     // 清空内容
                     await currentPage.evaluate((sel) => {
                         const element = document.querySelector(sel);
@@ -547,10 +597,10 @@ async function fillVideoInformation(metadata) {
                             element.focus();
                         }
                     }, selector);
-                    
+
                     // 输入新内容
                     await currentPage.type(selector, metadata.description, { delay: 50 });
-                    
+
                     console.log('✅ 简介已填写');
                     descFilled = true;
                     break;
@@ -559,10 +609,10 @@ async function fillVideoInformation(metadata) {
                     continue;
                 }
             }
-            
+
             if (!descFilled) {
                 console.log('⚠️ 简介填写失败，尝试备用方法...');
-                
+
                 // 备用方法：通过JavaScript直接操作
                 try {
                     await currentPage.evaluate((description) => {
@@ -597,11 +647,11 @@ async function fillVideoInformation(metadata) {
             for (const selector of categorySelectors) {
                 try {
                     await currentPage.waitForSelector(selector, { timeout: 3000 });
-                    
+
                     // 点击分区选择器打开下拉菜单
                     await currentPage.click(selector);
                     await setTimeout(1000);
-                    
+
                     // 查找"游戏"选项
                     const gameOptionSelectors = [
                         'div:contains("游戏")', // 需要特殊处理
@@ -609,39 +659,39 @@ async function fillVideoInformation(metadata) {
                         '[data-value="game"]',
                         '[data-value="4"]' // B站游戏分区ID
                     ];
-                    
+
                     // 处理文本内容选择
                     const gameSelected = await currentPage.evaluate(() => {
                         // 查找包含"游戏"文本的元素
                         const allElements = Array.from(document.querySelectorAll('div, span, li, option'));
-                        const gameElement = allElements.find(el => 
+                        const gameElement = allElements.find(el =>
                             el.textContent && el.textContent.trim() === '游戏'
                         );
-                        
+
                         if (gameElement) {
                             gameElement.click();
                             return true;
                         }
                         return false;
                     });
-                    
+
                     if (gameSelected) {
                         console.log('✅ 游戏分区已选择');
                         categorySet = true;
                         await setTimeout(1000);
                         break;
                     }
-                    
+
                 } catch (e) {
                     console.log(`⚠️ 分区选择器 ${selector} 失败，尝试下一个...`);
                     continue;
                 }
             }
-            
+
             if (!categorySet) {
                 console.log('⚠️ 自动设置游戏分区失败，用户需要手动选择');
             }
-            
+
         } catch (error) {
             console.log('⚠️ 分区设置出错，用户需要手动选择');
         }
@@ -649,7 +699,7 @@ async function fillVideoInformation(metadata) {
         // 4. 填写标签 - 需要先清空现有标签
         if (metadata.tags) {
             console.log('🏷️ 开始处理标签...');
-            
+
             try {
                 // 首先清空现有标签
                 console.log('🗑️ 清空现有标签...');
@@ -666,9 +716,9 @@ async function fillVideoInformation(metadata) {
                         }
                     });
                 });
-                
+
                 await setTimeout(1000);
-                
+
                 // 查找标签输入框
                 const tagSelectors = [
                     'input[placeholder*="标签"]',
@@ -688,11 +738,11 @@ async function fillVideoInformation(metadata) {
 
                         for (const tag of tagList) {
                             console.log(`🏷️ 添加标签: ${tag}`);
-                            
+
                             // 点击输入框
                             await currentPage.click(selector);
                             await setTimeout(300);
-                            
+
                             // 清空输入框
                             await currentPage.evaluate((sel) => {
                                 const input = document.querySelector(sel);
@@ -701,16 +751,16 @@ async function fillVideoInformation(metadata) {
                                     input.dispatchEvent(new Event('input', { bubbles: true }));
                                 }
                             }, selector);
-                            
+
                             // 输入标签
                             await currentPage.type(selector, tag, { delay: 100 });
                             await setTimeout(500);
-                            
+
                             // 按回车确认标签
                             await currentPage.keyboard.press('Enter');
                             await setTimeout(800);
                         }
-                        
+
                         console.log('✅ 标签已填写');
                         tagsFilled = true;
                         break;
@@ -719,11 +769,11 @@ async function fillVideoInformation(metadata) {
                         continue;
                     }
                 }
-                
+
                 if (!tagsFilled) {
                     console.log('⚠️ 标签填写失败，用户需要手动添加');
                 }
-                
+
             } catch (error) {
                 console.log('⚠️ 标签处理出错:', error.message);
             }
@@ -853,7 +903,7 @@ async function submitVideo() {
                 if (selector.includes(':contains')) {
                     const text = selector.match(/contains\("([^"]+)"/)[1];
                     console.log(`🔍 尝试按文本查找按钮: "${text}"`);
-                    
+
                     const submitButton = await currentPage.evaluateHandle((text) => {
                         const elements = Array.from(document.querySelectorAll('span, button'));
                         return elements.find(el => el.textContent?.includes(text));
@@ -868,21 +918,21 @@ async function submitVideo() {
                 } else {
                     // 常规CSS选择器
                     console.log(`🔍 尝试选择器: ${selector}`);
-                    
+
                     // 等待元素出现，但不要等太久
                     await currentPage.waitForSelector(selector, { timeout: 3000 });
-                    
+
                     // 检查元素是否可见和可点击
                     const isVisible = await currentPage.evaluate((sel) => {
                         const el = document.querySelector(sel);
                         if (!el) return false;
-                        
+
                         const style = window.getComputedStyle(el);
-                        return style.display !== 'none' && 
-                               style.visibility !== 'hidden' && 
-                               style.opacity !== '0';
+                        return style.display !== 'none' &&
+                            style.visibility !== 'hidden' &&
+                            style.opacity !== '0';
                     }, selector);
-                    
+
                     if (isVisible) {
                         await currentPage.click(selector);
                         submitSuccess = true;
@@ -900,13 +950,13 @@ async function submitVideo() {
 
         if (!submitSuccess) {
             console.log('⚠️ 所有选择器都失败，尝试最后的备用方案...');
-            
+
             // 最后的备用方案：查找所有可能的提交元素
             try {
                 const found = await currentPage.evaluate(() => {
                     const keywords = ['立即投稿', '投稿', '提交', '发布'];
                     const selectors = ['span', 'button', 'div[role="button"]', '[class*="submit"]', '[class*="publish"]'];
-                    
+
                     for (const sel of selectors) {
                         const elements = document.querySelectorAll(sel);
                         for (const el of elements) {
@@ -919,7 +969,7 @@ async function submitVideo() {
                     }
                     return { success: false };
                 });
-                
+
                 if (found.success) {
                     submitSuccess = true;
                     console.log(`🚀 备用方案成功: 点击了包含"${found.text}"的${found.selector}元素`);
@@ -931,7 +981,7 @@ async function submitVideo() {
 
         if (!submitSuccess) {
             console.log('⚠️ 未找到投稿按钮，请用户手动点击投稿');
-            
+
             // 在页面上显示提示
             await currentPage.evaluate(() => {
                 const tip = document.createElement('div');
@@ -950,10 +1000,10 @@ async function submitVideo() {
                 `;
                 tip.textContent = '⚠️ 请手动点击"立即投稿"按钮完成投稿';
                 document.body.appendChild(tip);
-                
+
                 setTimeout(() => tip.remove(), 10000); // 10秒后自动消失
             });
-            
+
             return {
                 success: true,
                 message: '视频信息已填写完成，请手动点击"立即投稿"按钮完成投稿',
@@ -997,16 +1047,18 @@ async function submitVideo() {
 // 检查登录状态
 app.get('/check-login', async (req, res) => {
     try {
+        const browserAlive = await isBrowserAlive();
+
         const response = await axios.get(`${PYTHON_BACKEND}/check-login`);
         res.json({
             ...response.data,
-            browserReady: !!browser && !!currentPage
+            browserReady: browserAlive
         });
     } catch (error) {
         res.json({
             isLoggedIn: false,
-            browserReady: !!browser && !!currentPage,
-            message: '无法连接到Python后端'
+            browserReady: false,
+            message: '无法连接到Python后端或浏览器已断开'
         });
     }
 });
