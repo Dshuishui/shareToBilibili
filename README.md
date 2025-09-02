@@ -110,7 +110,7 @@ node app.js
 
 ### 后端 (Python)
 - 使用Flask框架提供RESTful API
-- 使用bilibili-api-python库与B站API交互
+- 使用 [bilibili-api-python](https://github.com/Nemo2011/bilibili-api) 库与B站API交互
 - 处理视频上传逻辑
 
 ### 通信流程
